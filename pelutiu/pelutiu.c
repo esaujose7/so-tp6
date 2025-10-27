@@ -212,10 +212,13 @@ void* client_thread(void* arg) {
 
     // 2. Acquire mutex to access shared waiting room
     pthread_mutex_lock(&mutex_access_chairs);
-
     // 3. Place client in waiting room
     waiting_room[waiting_in] = *info;
     waiting_in = (waiting_in + 1) % M_WAITING_CHAIRS;
+    pthread_mutex_unlock(&mutex_access_chairs);
+
+    // 6. Signal that a customer has arrived
+    sem_post(&sem_customers);
 
     // 4. Update TUI display lists (protected by ncurses mutex)
     pthread_mutex_lock(&mutex_ncurses);
@@ -227,12 +230,6 @@ void* client_thread(void* arg) {
     }
     draw_tui();
     pthread_mutex_unlock(&mutex_ncurses);
-
-    // 5. Release mutex for waiting room
-    pthread_mutex_unlock(&mutex_access_chairs);
-
-    // 6. Signal that a customer has arrived
-    sem_post(&sem_customers);
 
     // 7. Wait for an available barber
     sem_wait(&sem_barbers);
