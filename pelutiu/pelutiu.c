@@ -20,6 +20,8 @@ typedef struct {
 } ClientData;
 
 // --- Global State Variables ---
+WINDOW *main_win;
+WINDOW *input_win;
 int N_BARBERS;          // Number of barbers
 int M_WAITING_CHAIRS;   // Number of waiting chairs
 int clients_waiting_outside_count = 0; // Count of clients who couldn't find a chair
@@ -42,19 +44,19 @@ pthread_mutex_t mutex_access_chairs; // Mutex for accessing waiting_room and rel
 pthread_mutex_t mutex_ncurses;       // Mutex for all ncurses operations and display lists
 
 // --- TUI (ncurses) Functions ---
-void draw_tui() {
+void draw_main_window(WINDOW *win) {
     // This function MUST be called within pthread_mutex_lock/unlock(&mutex_ncurses)
-    clear();
-    box(stdscr, 0, 0);
+    werase(win);
+    box(win, 0, 0);
     
     int current_len; // Declare once
 
     // Title
-    mvprintw(0, (COLS - strlen("PELUTIU - PELUQUERIA INTERACTIVA (v2)")) / 2, "PELUTIU - PELUQUERIA INTERACTIVA (v2)");
+    mvwprintw(win, 0, (COLS - strlen("PELUTIU - PELUQUERIA INTERACTIVA (v2)")) / 2, "PELUTIU - PELUQUERIA INTERACTIVA (v2)");
 
     // Section ESPERANDO (Afuera)
-    mvprintw(2, 2, "ESPERANDO (Afuera):");
-    mvprintw(3, 2, "%d:", clients_waiting_outside_count);
+    mvwprintw(win, 2, 2, "ESPERANDO (Afuera):");
+    mvwprintw(win, 3, 2, "%d:", clients_waiting_outside_count);
 
     char afuera_str[256] = "";
     current_len = 0;
@@ -68,13 +70,13 @@ void draw_tui() {
     } else {
         snprintf(afuera_str, sizeof(afuera_str), "Nadie");
     }
-    mvprintw(3, 15, "%s", afuera_str);
+    mvwprintw(win, 3, 15, "%s", afuera_str);
 
     // Section SENTADOS
     int current_waiting_clients;
     sem_getvalue(&sem_customers, &current_waiting_clients);
-    mvprintw(5, 2, "SENTADOS:");
-    mvprintw(6, 2, "%d / %d:", current_waiting_clients, M_WAITING_CHAIRS);
+    mvwprintw(win, 5, 2, "SENTADOS:");
+    mvwprintw(win, 6, 2, "%d / %d:", current_waiting_clients, M_WAITING_CHAIRS);
     
     char sentados_str[256] = "";
     current_len = 0;
@@ -88,14 +90,14 @@ void draw_tui() {
     } else {
         snprintf(sentados_str, sizeof(sentados_str), "Nadie");
     }
-    mvprintw(6, 15, "%s", sentados_str);
+    mvwprintw(win, 6, 15, "%s", sentados_str);
 
     // Section CORTANDO
     int busy_barbers;
     sem_getvalue(&sem_barbers, &busy_barbers); // Get value of available barbers
     busy_barbers = N_BARBERS - busy_barbers; // Calculate busy barbers
-    mvprintw(8, 2, "CORTANDO:");
-    mvprintw(9, 2, "%d / %d:", busy_barbers, N_BARBERS);
+    mvwprintw(win, 8, 2, "CORTANDO:");
+    mvwprintw(win, 9, 2, "%d / %d:", busy_barbers, N_BARBERS);
 
     char cortando_str[256] = "";
     current_len = 0;
@@ -109,13 +111,9 @@ void draw_tui() {
     } else {
         snprintf(cortando_str, sizeof(cortando_str), "Nadie");
     }
-    mvprintw(9, 15, "%s", cortando_str);
-
-    // Prompt de entrada
-    mvprintw(LINES - PROMPT_HEIGHT + 1, 2, "Ingress Cliente: ");
-    move(LINES - PROMPT_HEIGHT + 1, 19); // Position cursor for input
+    mvwprintw(win, 9, 15, "%s", cortando_str);
     
-    refresh();
+    wrefresh(win);
 }
 
 // --- Barber Thread ---
@@ -152,7 +150,7 @@ void* barber_thread(void* arg) {
         // A simpler approach for display_waiting is to just iterate the circular buffer.
         // For now, let's just clear the first empty slot.
         // The current_waiting_clients calculation in draw_tui is more accurate.
-        draw_tui();
+        draw_main_window(main_win);
         pthread_mutex_unlock(&mutex_ncurses);
 
         // 6. Release mutex for waiting room
@@ -167,7 +165,7 @@ void* barber_thread(void* arg) {
         // 9. Update TUI display (protected by ncurses mutex)
         pthread_mutex_lock(&mutex_ncurses);
         display_cutting[barber_id][0] = '\0'; // Clear barber's cutting slot
-        draw_tui();
+        draw_main_window(main_win);
         pthread_mutex_unlock(&mutex_ncurses);
     }
     return NULL;
@@ -185,7 +183,7 @@ void* client_thread(void* arg) {
         pthread_mutex_lock(&mutex_ncurses);
         strcpy(display_afuera[clients_waiting_outside_count], info->name);
         clients_waiting_outside_count++;
-        draw_tui();
+        draw_main_window(main_win);
         pthread_mutex_unlock(&mutex_ncurses);
 
         // Blocking wait for a chair to become free
@@ -206,7 +204,7 @@ void* client_thread(void* arg) {
             }
         }
         display_afuera[99][0] = '\0';
-        draw_tui();
+        draw_main_window(main_win);
         pthread_mutex_unlock(&mutex_ncurses);
     }
 
@@ -228,7 +226,7 @@ void* client_thread(void* arg) {
             break;
         }
     }
-    draw_tui();
+    draw_main_window(main_win);
     pthread_mutex_unlock(&mutex_ncurses);
 
     // 7. Wait for an available barber
@@ -267,7 +265,12 @@ int main(int argc, char *argv[]) {
     initscr();             
     cbreak();              
     noecho();              
-    keypad(stdscr, TRUE);  
+    keypad(stdscr, TRUE);
+
+    // Create windows
+    main_win = newwin(LINES - PROMPT_HEIGHT, COLS, 0, 0);
+    input_win = newwin(PROMPT_HEIGHT, COLS, LINES - PROMPT_HEIGHT, 0);
+    scrollok(main_win, TRUE); // Not strictly needed but good practice
     
     // 3. Initialize synchronization primitives
     sem_init(&sem_customers, 0, 0);             // No customers initially
@@ -291,16 +294,23 @@ int main(int argc, char *argv[]) {
     
     // 6. Main loop for TUI and input
     char input_buffer[100];
+    
+    // Initial draw
+    pthread_mutex_lock(&mutex_ncurses);
+    draw_main_window(main_win);
+    pthread_mutex_unlock(&mutex_ncurses);
+
     while (1) {
-        // a. Draw current state
-        pthread_mutex_lock(&mutex_ncurses);
-        draw_tui();
-        pthread_mutex_unlock(&mutex_ncurses);
-        
+        // Prepare the input window
+        werase(input_win);
+        box(input_win, 0, 0);
+        mvwprintw(input_win, 1, 2, "Ingress Cliente: ");
+        wmove(input_win, 1, 19);
+        wrefresh(input_win);
+
         // b. Capture user input (Name Time)
-        move(LINES - PROMPT_HEIGHT + 1, 19); 
         echo(); // Temporarily enable echo for input
-        getstr(input_buffer); // Blocks until ENTER
+        wgetstr(input_win, input_buffer); // Blocks until ENTER
         noecho(); // Disable echo
 
         char name[MAX_NAME_LEN];
@@ -322,15 +332,15 @@ int main(int argc, char *argv[]) {
             pthread_create(&client_tid, NULL, client_thread, (void*)info);
             pthread_detach(client_tid); // Don't join client threads
         } else { // Handle invalid input
-            pthread_mutex_lock(&mutex_ncurses);
-            mvprintw(LINES - 1, 2, "Entrada inválida. Use: <nombre> <tiempo> o 'exit'");
-            draw_tui(); // Redraw to clear previous prompt and show message
-            pthread_mutex_unlock(&mutex_ncurses);
-            sleep(1); // Pause for user to see message
+            mvwprintw(input_win, 2, 2, "Entrada inválida. Use: <nombre> <tiempo> o 'exit'");
+            wrefresh(input_win);
+            sleep(1);
         }
     }
 
     // 7. Cleanup (will be reached now)
+    delwin(main_win);
+    delwin(input_win);
     endwin();
     sem_destroy(&sem_customers);
     sem_destroy(&sem_barbers);
